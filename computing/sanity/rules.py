@@ -885,3 +885,181 @@ RULE_MAP = {
     "distinct_columns": DistinctColumnsRule,
     "expression": ExpressionRule,
 }
+
+
+def _find_column(df: pd.DataFrame, names: List[str]) -> Optional[str]:
+    """Return the first column matching one of names, ignoring case."""
+    lookup = {str(col).lower(): col for col in df.columns}
+    for name in names:
+        if str(name).lower() in lookup:
+            return lookup[str(name).lower()]
+    return None
+
+
+class PairRule(ABC):
+    """
+    Rule comparing a vector layer with its stats-generator Excel sheet.
+
+    Pair rules run only through VectorValidator.validate_pair, with
+    applies_to: [pair]. They catch sheets built from a different generation
+    of the data than the vector they summarise.
+    """
+
+    DEFAULT_KEYS = ["uid", "mws uid", "mws_id"]
+
+    def __init__(self, name: str, value: Any = None, **options: Any) -> None:
+        self.name = name
+        self.value = value
+        self.options = options
+
+    def keys(self, vector_df: pd.DataFrame, excel_df: pd.DataFrame):
+        vector_key = _find_column(
+            vector_df, [self.options["vector_key"]] if "vector_key" in self.options else self.DEFAULT_KEYS
+        )
+        excel_key = _find_column(
+            excel_df, [self.options["excel_key"]] if "excel_key" in self.options else self.DEFAULT_KEYS
+        )
+        return vector_key, excel_key
+
+    def missing_key_result(self, vector_key, excel_key) -> Dict[str, Any]:
+        return {
+            "rule": self.name,
+            "results": [
+                {
+                    "field": f"{vector_key or '?'} / {excel_key or '?'}",
+                    "passed": False,
+                    "invalid_count": 1,
+                    "uids": [],
+                    "message": "Id column not found in "
+                    + " and ".join(
+                        form
+                        for form, key in (("vector", vector_key), ("excel", excel_key))
+                        if key is None
+                    ),
+                }
+            ],
+        }
+
+    @abstractmethod
+    def validate_pair(self, vector_df: pd.DataFrame, excel_df: pd.DataFrame) -> Dict[str, Any]:
+        pass
+
+
+def _mws_level(ids: set) -> set:
+    """Reduce ids like 12_305795_1377 (feature 1377 in MWS 12_305795) to the MWS id."""
+    return {"_".join(str(i).split("_")[:2]) for i in ids}
+
+
+class IdCoveragePairRule(PairRule):
+    def validate_pair(self, vector_df: pd.DataFrame, excel_df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Validate that the vector and the sheet cover the same ids.
+
+        When one form is keyed more finely than the other (per water body vs
+        per MWS), both are compared at MWS level.
+
+        Args:
+            vector_df: The vector layer.
+            excel_df: The Excel sheet.
+
+        Returns:
+            Rule result dictionary listing ids found in only one form.
+        """
+        vector_key, excel_key = self.keys(vector_df, excel_df)
+        if vector_key is None or excel_key is None:
+            return self.missing_key_result(vector_key, excel_key)
+
+        v_ids = {str(i) for i in vector_df[vector_key].dropna()}
+        x_ids = {str(i) for i in excel_df[excel_key].dropna()}
+        depth = lambda ids: max((i.count("_") for i in ids), default=0)
+        if depth(v_ids) != depth(x_ids):
+            v_ids, x_ids = _mws_level(v_ids), _mws_level(x_ids)
+
+        only_vector, only_excel = sorted(v_ids - x_ids), sorted(x_ids - v_ids)
+        results = []
+        for form, ids in (("vector", only_vector), ("excel", only_excel)):
+            results.append(
+                {
+                    "field": f"{vector_key} / {excel_key}",
+                    "passed": not ids,
+                    "invalid_count": len(ids),
+                    "uids": ids,
+                    "message": f"{len(ids)} ids only in the {form}" if ids else None,
+                }
+            )
+        return {"rule": self.name, "results": results}
+
+
+class FieldMatchPairRule(PairRule):
+    def validate_pair(self, vector_df: pd.DataFrame, excel_df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Validate that fields shared by the vector and the sheet agree.
+
+        value lists field pairs: [{vector: area_in_ha, excel: area_in_ha,
+        tolerance: 0.01}]. Rows are joined on the id columns; numbers must
+        agree within the relative tolerance, other values exactly. A value
+        present in one form and null in the other is a mismatch.
+
+        Args:
+            vector_df: The vector layer.
+            excel_df: The Excel sheet.
+
+        Returns:
+            Rule result dictionary with mismatching ids per field pair.
+        """
+        vector_key, excel_key = self.keys(vector_df, excel_df)
+        if vector_key is None or excel_key is None:
+            return self.missing_key_result(vector_key, excel_key)
+
+        results = []
+        for pair in self.value or []:
+            v_col = _find_column(vector_df, [pair["vector"]])
+            x_col = _find_column(excel_df, [pair["excel"]])
+            label = f"{pair['vector']} / {pair['excel']}"
+            if v_col is None or x_col is None:
+                results.append(
+                    {
+                        "field": label,
+                        "passed": False,
+                        "invalid_count": 1,
+                        "uids": [],
+                        "message": "Field is missing",
+                    }
+                )
+                continue
+            left = pd.DataFrame(
+                {"key": vector_df[vector_key].astype(str), "v": vector_df[v_col].values}
+            )
+            right = pd.DataFrame(
+                {"key": excel_df[excel_key].astype(str), "x": excel_df[x_col].values}
+            )
+            joined = left.merge(right, on="key", how="inner")
+            v_blank, x_blank = blank_mask(joined["v"]), blank_mask(joined["x"])
+            v_num = pd.to_numeric(joined["v"], errors="coerce")
+            x_num = pd.to_numeric(joined["x"], errors="coerce")
+            numeric = v_num.notna() & x_num.notna()
+            tolerance = float(pair.get("tolerance", 0))
+            differs = pd.Series(False, index=joined.index)
+            differs[numeric] = (v_num - x_num).abs()[numeric] > tolerance * x_num.abs()[numeric]
+            text = ~numeric & ~v_blank & ~x_blank
+            differs[text] = joined["v"][text].astype(str) != joined["x"][text].astype(str)
+            differs |= v_blank != x_blank
+            bad = joined[differs]
+            results.append(
+                {
+                    "field": label,
+                    "passed": len(bad) == 0,
+                    "invalid_count": len(bad),
+                    "uids": bad["key"].tolist(),
+                    "message": f"{len(bad)} of {len(joined)} shared ids differ"
+                    if len(bad)
+                    else None,
+                }
+            )
+        return {"rule": self.name, "results": results}
+
+
+PAIR_RULE_MAP = {
+    "id_coverage": IdCoveragePairRule,
+    "field_match": FieldMatchPairRule,
+}

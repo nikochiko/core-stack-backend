@@ -144,6 +144,12 @@ rules:
     value: [Safe, Semi-Critical, Critical, Over Exploited, Saline, Not Assessed, No Data]
     allow_missing_fields: true
 
+  # Pair: the sheet must cover the same MWS as the vector it summarises.
+  # A mismatch means the sheet was built from an older generation of the layer.
+  - name: stage_of_groundwater_extraction_pair_id_coverage
+    applies_to: [pair]
+    type: id_coverage
+
   # Units: a block's annual recharge or extraction is far below 50 billion m3
   # (all of India recharges a few hundred). Larger values mean the column is
   # in another unit (CGWB reports hectare-metres).

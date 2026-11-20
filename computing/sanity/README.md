@@ -66,7 +66,10 @@ Each YAML rule can include `applies_to`:
 applies_to: [excel]
 applies_to: [vector]
 applies_to: [excel, vector]
+applies_to: [pair]
 ```
+
+`pair` rules compare a vector layer with the Excel sheet built from it (same ids, same shared values). They only run through `run_pair_validation`, and catch sheets that were built from an older generation of the layer.
 
 This matters because vector and Excel outputs often use different schemas. During Excel validation, vector-only rules are skipped. During vector validation, Excel-only rules are skipped.
 
@@ -131,6 +134,8 @@ The current rule types live in `rules.py`.
 | `max_null_fraction` | Fails a field whose share of null, blank or `ignore_values` rows exceeds `value` (catches all-no-data columns) |
 | `distinct_columns` | Fails a pair of fields that are identical in every row (one column written into another) |
 | `expression` | Row-level cross-field check written as a pandas expression, e.g. `TOT_M + TOT_F == TOT_P` |
+| `id_coverage` (pair) | Fails ids present in only one of the vector and the sheet |
+| `field_match` (pair) | Fails ids whose shared field differs between the vector and the sheet |
 
 Cross-field example, checked once per year column:
 
@@ -182,11 +187,13 @@ from computing.sanity.run_validation import (
     run_layer_validation,
     run_excel_validation,
     run_excel_workbook_validation,
+    run_pair_validation,
 )
 
 vector_report = run_layer_validation("data/layer.geojson", "cropping_intensity")
 sheet_report = run_excel_validation("data/output.xlsx", "cropping_intensity")
 workbook_report = run_excel_workbook_validation("data/output.xlsx")
+pair_report = run_pair_validation("data/layer.geojson", "data/output.xlsx", "mws")
 ```
 
 ## How Configs Were Created

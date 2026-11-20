@@ -35,7 +35,8 @@ Rule types (`computing/sanity/rules.py`): `data_type`
 (integer/float/numeric/string/boolean, judged on the whole column's dtype),
 `min_value`, `max_value`, `not_null`, `allowed_values`, `required_fields`,
 `required_any_field_pattern`, `unique`, `max_null_fraction`,
-`distinct_columns` and `expression` (cross-field).
+`distinct_columns`, `expression` (cross-field), and the pair types
+`id_coverage` and `field_match` (`applies_to: [pair]`, vector vs sheet).
 `ignore_values: [-9999]` makes bounds skip a no-data sentinel. Fields are picked with `field`, `fields` or
 `field_pattern` (fnmatch, case-insensitive) plus `exclude_field_patterns`.
 Quirks that have bitten before:
@@ -135,7 +136,8 @@ For each tehsil and form it prints the framework's status and errors, plus:
   stale, or the rule targets the other form and should change `applies_to`.
 - **unchecked fields** — columns no rule inspects. Decide per field whether it
   deserves a rule; leftovers and metadata usually don't.
-- **uid coverage** — ids present in only one of the two forms.
+- **pair** — the config's pair rules: ids present in only one of the two
+  forms (`id_coverage`) and shared fields that disagree (`field_match`).
 
 The "row ids e.g." in error lines are the failing rows' ids, not the bad values;
 look the rows up in the data to see what's wrong.

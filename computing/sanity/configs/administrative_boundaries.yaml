@@ -128,3 +128,9 @@ rules:
     type: max_value
     fields: [total_population_count]
     value: 300000
+
+  - name: admin_pair_id_coverage
+    applies_to: [pair]
+    type: id_coverage
+    vector_key: vill_ID
+    excel_key: village_id
